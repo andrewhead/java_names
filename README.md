@@ -25,7 +25,7 @@ javac ExtractContexts.java
 
 Then run the extraction with this command:
 ```bash
-java ExtractContacts <path-to-data-directory>
+java ExtractContexts <path-to-data-directory>
 ```
 
 This program will search through the directory recursively
