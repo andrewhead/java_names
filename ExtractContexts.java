@@ -2,9 +2,16 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.file.Files;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Stack;
@@ -12,6 +19,7 @@ import java.util.Stack;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.filefilter.DirectoryFileFilter;
 import org.apache.commons.io.filefilter.RegexFileFilter;
+import org.apache.commons.io.filefilter.TrueFileFilter;
 
 import org.antlr.v4.runtime.*;
 import org.antlr.v4.runtime.tree.*;
@@ -170,6 +178,76 @@ public class ExtractContexts {
 
     }
 
+    static class ParseVisitor extends SimpleFileVisitor<Path> {
+
+        PrintWriter writer;
+        PrintWriter errorWriter;
+        int numVisits = 0;
+
+        public ParseVisitor(PrintWriter writer, PrintWriter errorWriter) {
+            this.writer = writer;
+            this.errorWriter = errorWriter;
+        }
+
+        @Override
+        public FileVisitResult visitFile(Path path, BasicFileAttributes attrs) throws IOException {
+
+            // Only try to parse Java files
+            if (!path.toString().endsWith(".java")) 
+                return FileVisitResult.CONTINUE;
+
+            numVisits += 1;
+
+            // Parse the program
+            CharStream input = null;
+            try {
+                input = CharStreams.fromFileName(path.toString());
+            } catch (IOException e) {}
+            if (input != null) { 
+                CommonTokenStream tokens = null;
+                JavaParser parser;
+                ParseTree tree = null;
+                try {
+                    JavaLexer lexer = new JavaLexer(input);
+                    lexer.removeErrorListeners();
+                    lexer.addErrorListener(ErrorListener.INSTANCE);
+
+                    tokens = new CommonTokenStream(lexer);
+                    parser = new JavaParser(tokens);
+                    parser.removeErrorListeners();
+                    parser.addErrorListener(ErrorListener.INSTANCE);
+                    tree = parser.compilationUnit();
+                } catch (ParseCancellationException e) {
+                    System.out.print("E");
+                    errorWriter.println("Failure to parse file:" + path.toString());
+                }
+
+                if (numVisits % 100 == 0) {
+                    System.out.print("(" + numVisits +")\n");
+                }
+
+                if (tree != null) {
+                    // Fetch all variable contexts from the program
+                    ParseTreeWalker walker = new ParseTreeWalker();
+                    VariableWalker listener = new VariableWalker(tokens, 5);
+                    walker.walk(listener, tree);
+                    List<VariableUsage> usages = listener.getUsages();
+                    for (VariableUsage usage: usages) {
+                        String s = usage.getVariableName();
+                        for (List<Token> context: usage.getContexts()) {
+                            for (Token tok: context) {
+                                s += "," + tok.getText();
+                            }
+                        }
+                        writer.println(s);
+                    }
+                    System.out.print(".");
+                }
+            }
+            return FileVisitResult.CONTINUE;
+        }
+    }
+
     public static void main(String[] args) {
 
         PrintWriter writer;
@@ -184,53 +262,14 @@ public class ExtractContexts {
             return;
         }
 
-        CharStream input = null;
         String dirName = args[0];
-        String[] fileExtensions = { "java" };
-
-        Collection<File> files = FileUtils.listFiles(
-            new File(dirName), fileExtensions, true);
-        for (File file : files) {
-            try {
-                input = CharStreams.fromFileName(file.getPath());
-            } catch (IOException e) {}
-            if (input != null) { 
-
-                CommonTokenStream tokens;
-                JavaParser parser;
-                ParseTree tree;
-                try {
-                    JavaLexer lexer = new JavaLexer(input);
-                    lexer.removeErrorListeners();
-                    lexer.addErrorListener(ErrorListener.INSTANCE);
-
-                    tokens = new CommonTokenStream(lexer);
-                    parser = new JavaParser(tokens);
-                    parser.removeErrorListeners();
-                    parser.addErrorListener(ErrorListener.INSTANCE);
-                    tree = parser.compilationUnit();
-                } catch (ParseCancellationException e) {
-                    System.out.print("E");
-                    errorWriter.println("Failure to parse file:" + file.getPath());
-                    continue;
-                }
-
-                ParseTreeWalker walker = new ParseTreeWalker();
-                VariableWalker listener = new VariableWalker(tokens, 5);
-                walker.walk(listener, tree);
-                List<VariableUsage> usages = listener.getUsages();
-                for (VariableUsage usage: usages) {
-                    String s = usage.getVariableName();
-                    for (List<Token> context: usage.getContexts()) {
-                        for (Token tok: context) {
-                            s += "," + tok.getText();
-                        }
-                    }
-                    writer.println(s);
-                }
-                System.out.print(".");
-            }
+        System.out.println("Now parsing programs");
+        try {
+            Files.walkFileTree(Paths.get(dirName), new ParseVisitor(writer, errorWriter));
+        } catch (IOException e) {
+            System.out.println("Couldn't finish tree walk:" + e);
         }
+
         System.out.println();
         writer.close();
         errorWriter.close();
