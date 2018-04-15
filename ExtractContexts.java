@@ -196,13 +196,15 @@ public class ExtractContexts {
             if (!path.toString().endsWith(".java")) 
                 return FileVisitResult.CONTINUE;
 
-            numVisits += 1;
-
             // Parse the program
             CharStream input = null;
             try {
                 input = CharStreams.fromFileName(path.toString());
             } catch (IOException e) {}
+
+            boolean errorOccurred = false;
+            numVisits += 1;
+
             if (input != null) { 
                 CommonTokenStream tokens = null;
                 JavaParser parser;
@@ -218,19 +220,22 @@ public class ExtractContexts {
                     parser.addErrorListener(ErrorListener.INSTANCE);
                     tree = parser.compilationUnit();
                 } catch (ParseCancellationException e) {
-                    System.out.print("E");
-                    errorWriter.println("Failure to parse file:" + path.toString());
-                }
-
-                if (numVisits % 100 == 0) {
-                    System.out.print("(" + numVisits +")\n");
+                    errorOccurred = true;
+                    errorWriter.println("Failure to parse file: " + path.toString());
                 }
 
                 if (tree != null) {
                     // Fetch all variable contexts from the program
                     ParseTreeWalker walker = new ParseTreeWalker();
                     VariableWalker listener = new VariableWalker(tokens, 5);
-                    walker.walk(listener, tree);
+                    try {
+                        walker.walk(listener, tree);
+                    // Some of the files call a StackOverflow error.  I don't know why,
+                    // but for now we're ignoring them and moving on.
+                    } catch(StackOverflowError e) {
+                        errorOccurred = true;
+                        errorWriter.println("Stack Overflow for file: " + path.toString());
+                    }
                     List<VariableUsage> usages = listener.getUsages();
                     for (VariableUsage usage: usages) {
                         String s = usage.getVariableName();
@@ -241,8 +246,19 @@ public class ExtractContexts {
                         }
                         writer.println(s);
                     }
+                }
+
+                if (errorOccurred) {
+                    System.out.print("E");
+                } else {
                     System.out.print(".");
                 }
+
+                if (numVisits % 100 == 0) {
+                    System.out.print("(" + numVisits +")\n");
+                }
+
+
             }
             return FileVisitResult.CONTINUE;
         }
