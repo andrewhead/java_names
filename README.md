@@ -62,7 +62,7 @@ If you want to change the Java grammar (`JavaParser.g4`,
 this command:
 
 ```bash
-antlr4 *.g4 -listener
+antlr4 *.g4 -listener -o parser
 ```
 
 This assumes you have already initialized the development
