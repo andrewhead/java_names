@@ -34,15 +34,14 @@ to extract contexts from each one.
 
 The program outputs two files:
 
-First, the contexts, in `output.csv`.  There is no header
-for this file.  Each line starts with a variable name, and
-is followed by a number of fixed-length contexts.  Each
-context is just a sequence of token values, each one
-separated by a comma.  All the contexts are included
-back-to-back.  Note that some variables will have more (and
-in some cases, many more) contexts than others.  If you need
-all variables to have the same number of contexts, you must
-do that in a post-processing step.
+First, the contexts, in `output.json`.  Each line includes
+a separate JSON object, with a `variableName` (the actual
+variable name) and a `usage` object, which is an array of
+contexts of tokens.  Some of these tokens will be `<<PAD>>`,
+(a padding token if the file ran out of characters), or
+`<<REF>>`, which means that that token is a reference to
+the variable whose name is in `variableName`.  Some
+variables will have more contexts than others.
 
 Second, it outputs an `errors.txt` file, which will list all
 of the files that failed to parse.  You can get a sense for

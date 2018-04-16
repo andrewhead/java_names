@@ -16,6 +16,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Stack;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.filefilter.DirectoryFileFilter;
 import org.apache.commons.io.filefilter.RegexFileFilter;
@@ -33,7 +36,10 @@ public class ExtractContexts {
         public static final ErrorListener INSTANCE = new ErrorListener();
 
         @Override
-        public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol, int line, int charPositionInLine, String msg, RecognitionException e) throws ParseCancellationException {
+        public void syntaxError(
+                Recognizer<?, ?> recognizer, Object offendingSymbol,
+                int line, int charPositionInLine, String msg,
+                RecognitionException e) throws ParseCancellationException {
             throw new ParseCancellationException("Error");
         }
 
@@ -42,13 +48,13 @@ public class ExtractContexts {
     static class VariableUsage {
 
         private String variableName;
-        private List<List<Token>> usage = new ArrayList<List<Token>>();
+        private List<List<String>> usage = new ArrayList<List<String>>();
 
         public VariableUsage(String variableName) {
             this.variableName = variableName;
         }
 
-        public void addContext(List<Token> context) {
+        public void addContext(List<String> context) {
             this.usage.add(context);
         }
 
@@ -56,22 +62,45 @@ public class ExtractContexts {
             return this.variableName;
         }
 
-        public List<List<Token>> getContexts() {
+        public List<List<String>> getContexts() {
             return this.usage;
         }
 
         public String toString() {
             String s = "Variable:" + this.variableName + "\n";
-            for (List<Token> context: this.usage) {
+            for (List<String> context: this.usage) {
                 s += "[";
-                for (Token tok: context) {
-                    s += " '" + tok.getText() + "' ";
+                for (String t: context) {
+                    s += " '" + t + "' ";
                 }
                 s += "]\n";
             }
             return s;
         }
 
+    }
+
+    static class Terminal {
+
+        public String text;
+        public int scopeId;
+        public boolean isVariableDeclaration;
+        public boolean isVariableUse;
+
+        public Terminal(String text, int scopeId,
+                boolean isVariableDeclaration, boolean isVariableUse) {
+            this.text = text;
+            this.scopeId = scopeId;
+            this.isVariableDeclaration = isVariableDeclaration;
+            this.isVariableUse = isVariableUse;
+        }
+
+        public String toString() {
+            String s = this.text + "(" + this.scopeId;
+            if (this.isVariableDeclaration) s += "D";
+            if (this.isVariableUse) s += "U";
+            return s + ")";
+        }
     }
 
     /*
@@ -84,96 +113,225 @@ public class ExtractContexts {
      */
     static class VariableWalker extends JavaParserBaseListener {
 
-        private List<VariableUsage> usages = new ArrayList<VariableUsage>();
-        private Stack<Integer> methodIdStack = new Stack<Integer>();
-        private int lastNewMethodId = -1;
-        private Map<Integer, Map<String, VariableUsage>> methodUsages = (
+        // Keep track of the scopes where each variable is found.
+        private Stack<Integer> scopeIdStack;
+        private Stack<String> scopeTypeStack;
+        private int lastNewScopeId = -1;
+
+        // Special tokens
+        private final String PAD = "<<PAD>>";
+        private final String REFERENCE = "<<REF>>";
+
+        // Structures for saving unfinished usages:
+        // List of recent tokens that have been seen:
+        private List<Terminal> recentTerminals;
+        // List of all contexts that are still being created:
+        private Map<Integer, Map<String, List<List<Terminal>>>> unfinishedContexts = (
+            new HashMap<Integer, Map<String, List<List<Terminal>>>>());
+        // Table of usages, that maps from a scope and variable name to the usages:
+        private Map<Integer, Map<String, VariableUsage>> usageTable = (
             new HashMap<Integer, Map<String, VariableUsage>>());
 
+        // Other state for saving contexts.
         private CommonTokenStream tokens;
         private int contextSize;
 
         public VariableWalker(CommonTokenStream tokens, int contextSize) {
+
             this.tokens = tokens;
             this.contextSize = contextSize;
-        }
 
-        private void startMethodScope() {
-            // On entering a method, start listening for usages for just that method
-            this.lastNewMethodId ++;
-            int methodId = this.lastNewMethodId;
-            methodIdStack.push(methodId);
-            this.methodUsages.put(methodId, new HashMap<String, VariableUsage>());
-        }
-
-        private void endMethodScope() {
-            // When we leave a method, this should stop being considered as the current
-            // method for new usages found.
-            int methodId = methodIdStack.pop();
-
-            // Transfer all of the usages in this method into a central list.
-            for (VariableUsage usage: this.methodUsages.get(methodId).values()) {
-                this.usages.add(usage);
+            // Pre-load pad tokens into the list of recent terminals.
+            this.recentTerminals = new ArrayList<Terminal>();
+            for (int i = 0; i < this.contextSize; i++) {
+                this.recentTerminals.add(new Terminal(PAD, -1, false, false));
             }
+
+            // Initialize stack with an invalid scope ID (so that we can peek
+            // for some of the first terminals we encounter).
+            this.scopeIdStack = new Stack<Integer>();
+            this.scopeIdStack.push(this.lastNewScopeId);
+            this.scopeTypeStack = new Stack<String>();
+            this.scopeTypeStack.push("none");
         }
 
-        public void enterLambdaExpression(JavaParser.LambdaExpressionContext ctx) {
-            startMethodScope();
+        private boolean isVariableUse(TerminalNode node) {
+            ParseTree parentCtx = node.getParent();
+            if (parentCtx instanceof JavaParser.PrimaryContext) {
+                return true;
+            }
+            return false;
         }
 
-        public void exitLambdaExpression(JavaParser.LambdaExpressionContext ctx) {
-            endMethodScope();
+        private boolean isVariableDeclaration(TerminalNode node) {
+            ParseTree parentCtx = node.getParent();
+            if (parentCtx instanceof JavaParser.VariableDeclaratorIdContext) {
+                return true;
+            }
+            return false;
         }
 
-        public void enterMethodDeclaration(JavaParser.MethodDeclarationContext ctx) {
-            startMethodScope();
+        // As we're ending the walk, end all unterminated contexts, adding padding.
+        public void exitCompilationUnit(JavaParser.CompilationUnitContext ctx) {
+            updateUnfinishedContexts(null);
         }
 
-        public void exitMethodDeclaration(JavaParser.MethodDeclarationContext ctx) {
-            endMethodScope();
+        private List<String> finishContext(int scopeId, String variable, List<Terminal> terminals) {
+            List<String> context = new ArrayList<String>();
+            for (Terminal terminal: terminals) {
+                if (terminal.text.equals(variable) &&
+                    terminal.scopeId == scopeId &&
+                    (terminal.isVariableUse || terminal.isVariableDeclaration)) {
+                    context.add(REFERENCE);
+                } else {
+                    context.add(terminal.text);
+                }
+            }
+            while (context.size() <= this.contextSize * 2 + 1) {
+                context.add(PAD);
+            }
+            return context;
         }
 
-        private void saveIdentifierContext(ParserRuleContext ctx) {
-            TerminalNode node = ctx.getToken(JavaLexer.IDENTIFIER, 0);
-            if (node != null) {
-                String variableName = ctx.getText();
-                if (this.methodIdStack.size() > 0) {
-                    int currentMethodId = this.methodIdStack.peek();
-                    if (this.methodUsages.get(currentMethodId).get(variableName) != null) {
-                        VariableUsage usage = this.methodUsages.get(currentMethodId).get(variableName);
-                        int tokenIndex = ctx.getStart().getTokenIndex();
-                        List<Token> context = this.tokens.get(tokenIndex - contextSize, tokenIndex + contextSize);
-                        usage.addContext(context);
+        // Pass in "null" for the terminal if you want to flush all remaining unfinished contexts.
+        private void updateUnfinishedContexts(Terminal terminal) {
+            // TODO(andrewhead): Flush out the unfinished contexts at the end.
+            // Each variable in each scope can have multiple contexts in progress.  Whenever one
+            // of them finishes, we save it, and stop tracking it.
+            for (int scopeId: this.unfinishedContexts.keySet()) {
+                Map<String, List<List<Terminal>>> scopeContexts = this.unfinishedContexts.get(scopeId);
+                for (String variable: scopeContexts.keySet()) {
+                    List<List<Terminal>> variableContexts = scopeContexts.get(variable);
+                    // Backwards iteration necessary so we can remove finished contexts.
+                    for (int i = variableContexts.size() - 1; i >= 0; i--) {
+                        List<Terminal> context = variableContexts.get(i);
+                        if (terminal != null) {
+                            context.add(terminal);
+                        }
+                        if (terminal == null || (context.size() >= this.contextSize * 2 + 1)) {
+                            variableContexts.remove(context);
+                            List<String> finishedContext = finishContext(scopeId, variable, context);
+                            this.usageTable.get(scopeId).get(variable).addContext(finishedContext);
+                        }
                     }
                 }
             }
         }
 
-        public void enterVariableDeclaratorId(JavaParser.VariableDeclaratorIdContext ctx) {
-            if (this.methodIdStack.size() > 0) {
+        public void visitTerminal(TerminalNode node) {
 
-                int currentMethodId = this.methodIdStack.peek();
+            String text = node.getText();
+            int scopeId = this.scopeIdStack.peek();
+            boolean isVariableDeclaration = isVariableDeclaration(node);
+            boolean isVariableUse = isVariableUse(node);
 
-                // Create a new usage entry for this variable.
-                String variableName = ctx.getText();
-                this.methodUsages.get(currentMethodId).put(variableName, new VariableUsage(variableName));
+            // Create a new record for this terminal
+            Terminal terminal = new Terminal(
+                text, scopeId, isVariableDeclaration, isVariableUse);
 
-                // Save this declaration as a usage.
-                this.saveIdentifierContext(ctx);
+            // Add to terminal to the fixed-length context buffer
+            if (this.recentTerminals.size() >= this.contextSize) {
+                this.recentTerminals.remove(0);
             }
+            this.recentTerminals.add(terminal);
+
+            // Add this terminal to any unfinished contexts
+            updateUnfinishedContexts(terminal);
+
+        }
+
+        private void trackIdentifierContext(ParserRuleContext ctx) {
+            TerminalNode node = ctx.getToken(JavaLexer.IDENTIFIER, 0);
+            if (node != null) {
+                String variableName = ctx.getText();
+                int scopeId = this.scopeIdStack.peek();
+                if (this.usageTable.get(scopeId) != null) {
+                    Map<String, VariableUsage> scopeUsageTable = (this.usageTable.get(scopeId));
+                    if (scopeUsageTable.get(variableName) != null) {
+                        if (this.unfinishedContexts.get(scopeId) == null) {
+                            this.unfinishedContexts.put(scopeId, new HashMap<String, List<List<Terminal>>>());
+                        }
+                        Map<String, List<List<Terminal>>> scopeContexts = this.unfinishedContexts.get(scopeId);
+                        if (scopeContexts.get(variableName) == null) {
+                            scopeContexts.put(variableName, new ArrayList<List<Terminal>>());
+                        }
+                        List<List<Terminal>> variableContexts = scopeContexts.get(variableName);
+                        variableContexts.add(new ArrayList<Terminal>(this.recentTerminals));
+                    }
+                }
+            }
+        }
+
+
+        public void enterVariableDeclaratorId(JavaParser.VariableDeclaratorIdContext ctx) {
+            int scopeId = this.scopeIdStack.peek();
+            String scopeType = this.scopeTypeStack.peek();
+
+            // Only track variables that are defined at method level.
+            if (!scopeType.equals("method")) return;
+
+            // Create a new usage entry for this variable.
+            String variableName = ctx.getText();
+            this.usageTable.get(scopeId).put(variableName, new VariableUsage(variableName));
+
+            // Save this declaration as a usage.
+            this.trackIdentifierContext(ctx);
         }
 
         public void enterPrimary(JavaParser.PrimaryContext ctx) {
             // Whenever a variable is used, save this context.
-            this.saveIdentifierContext(ctx);
+            this.trackIdentifierContext(ctx);
+        }
+
+        // Utilities for starting and ending a scopeStarts a new scope whenever
+        private void startScope(String scopeType) {
+            // On entering a method, start listening for usages for just that method
+            this.lastNewScopeId ++;
+            int scopeId = this.lastNewScopeId;
+            scopeIdStack.push(scopeId);
+            this.usageTable.put(scopeId, new HashMap<String, VariableUsage>());
+            scopeTypeStack.push(scopeType);
+        }
+
+        private void endScope() {
+            scopeIdStack.pop();
+            scopeTypeStack.pop();
+        }
+
+        public void enterClassBody(JavaParser.ClassBodyContext ctx) {
+            startScope("class");
+        }
+        public void exitClassBody(JavaParser.ClassBodyContext ctx) {
+            endScope();
+        }
+        public void enterLambdaExpression(JavaParser.LambdaExpressionContext ctx) {
+            startScope("method");
+        }
+        public void exitLambdaExpression(JavaParser.LambdaExpressionContext ctx) {
+            endScope();
+        }
+        public void enterConstructorDeclaration(JavaParser.ConstructorDeclarationContext ctx) {
+            startScope("method");
+        }
+        public void exitConstructorDeclaration(JavaParser.ConstructorDeclarationContext ctx) {
+            endScope();
+        }
+        public void enterMethodDeclaration(JavaParser.MethodDeclarationContext ctx) {
+            startScope("method");
+        }
+        public void exitMethodDeclaration(JavaParser.MethodDeclarationContext ctx) {
+            endScope();
         }
 
         public List<VariableUsage> getUsages() {
-            return this.usages;
-        }
-
-        public void visitError() {
-            System.out.println("Error");
+            List<VariableUsage> usages = new ArrayList<VariableUsage>();
+            for (int scopeId: this.usageTable.keySet()) {
+                Map<String, VariableUsage> scopeUsage = this.usageTable.get(scopeId);
+                for (String variable: scopeUsage.keySet()) {
+                    usages.add(scopeUsage.get(variable));
+                }
+            }
+            return usages;
         }
 
     }
@@ -227,7 +385,7 @@ public class ExtractContexts {
                 if (tree != null) {
                     // Fetch all variable contexts from the program
                     ParseTreeWalker walker = new ParseTreeWalker();
-                    VariableWalker listener = new VariableWalker(tokens, 5);
+                    VariableWalker listener = new VariableWalker(tokens, 10);
                     try {
                         walker.walk(listener, tree);
                     // Some of the files call a StackOverflow error.  I don't know why,
@@ -237,14 +395,10 @@ public class ExtractContexts {
                         errorWriter.println("Stack Overflow for file: " + path.toString());
                     }
                     List<VariableUsage> usages = listener.getUsages();
+                    Gson gson = new GsonBuilder().disableHtmlEscaping().create();
                     for (VariableUsage usage: usages) {
-                        String s = usage.getVariableName();
-                        for (List<Token> context: usage.getContexts()) {
-                            for (Token tok: context) {
-                                s += "," + tok.getText();
-                            }
-                        }
-                        writer.println(s);
+                        String json = gson.toJson(usage);
+                        writer.println(json);
                     }
                 }
 
@@ -269,7 +423,7 @@ public class ExtractContexts {
         PrintWriter writer;
         PrintWriter errorWriter;
         try {
-            String outputFilename = "output.csv";
+            String outputFilename = "output.json";
             String errorFilename = "errors.txt";
             writer = new PrintWriter(new File(outputFilename));
             errorWriter = new PrintWriter(new File(errorFilename));

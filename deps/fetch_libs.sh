@@ -8,3 +8,4 @@ then
 fi
 
 wget --no-clobber https://www.antlr.org/download/antlr-4.7.1-complete.jar
+wget --no-clobber http://repo1.maven.org/maven2/com/google/code/gson/gson/2.8.2/gson-2.8.2.jar
