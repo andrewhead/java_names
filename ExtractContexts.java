@@ -187,7 +187,7 @@ public class ExtractContexts {
                     context.add(terminal.text);
                 }
             }
-            while (context.size() <= this.contextSize * 2 + 1) {
+            while (context.size() < this.contextSize * 2 + 1) {
                 context.add(PAD);
             }
             return context;
