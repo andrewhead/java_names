@@ -31,6 +31,9 @@ import org.antlr.v4.runtime.misc.*;
 
 public class ExtractContexts {
 
+    // Configurable parameters
+    static boolean OBFUSCATE = true;
+
     static class ErrorListener extends BaseErrorListener {
 
         public static final ErrorListener INSTANCE = new ErrorListener();
@@ -86,19 +89,26 @@ public class ExtractContexts {
         public int scopeId;
         public boolean isVariableDeclaration;
         public boolean isVariableUse;
+        public boolean isIdentifier;
+        public boolean isClassType;
 
         public Terminal(String text, int scopeId,
-                boolean isVariableDeclaration, boolean isVariableUse) {
+                boolean isVariableDeclaration, boolean isVariableUse,
+                boolean isIdentifier, boolean isClassType) {
             this.text = text;
             this.scopeId = scopeId;
             this.isVariableDeclaration = isVariableDeclaration;
             this.isVariableUse = isVariableUse;
+            this.isIdentifier = isIdentifier;
+            this.isClassType = isClassType;
         }
 
         public String toString() {
             String s = this.text + "(" + this.scopeId;
             if (this.isVariableDeclaration) s += "D";
             if (this.isVariableUse) s += "U";
+            if (this.isIdentifier) s += "I";
+            if (this.isClassType) s += "C";
             return s + ")";
         }
     }
@@ -121,6 +131,10 @@ public class ExtractContexts {
         // Special tokens
         private final String PAD = "<<PAD>>";
         private final String REFERENCE = "<<REF>>";
+        private final String VARIABLE_USE = "<<USE>>";
+        private final String VARIABLE_DECLARATION = "<<DEC>>";
+        private final String IDENTIFIER = "<<ID>>";
+        private final String CLASS_TYPE = "<<CLS>>";
 
         // Structures for saving unfinished usages:
         // List of recent tokens that have been seen:
@@ -144,7 +158,7 @@ public class ExtractContexts {
             // Pre-load pad tokens into the list of recent terminals.
             this.recentTerminals = new ArrayList<Terminal>();
             for (int i = 0; i < this.contextSize; i++) {
-                this.recentTerminals.add(new Terminal(PAD, -1, false, false));
+                this.recentTerminals.add(new Terminal(PAD, -1, false, false, false, false));
             }
 
             // Initialize stack with an invalid scope ID (so that we can peek
@@ -153,6 +167,18 @@ public class ExtractContexts {
             this.scopeIdStack.push(this.lastNewScopeId);
             this.scopeTypeStack = new Stack<String>();
             this.scopeTypeStack.push("none");
+        }
+
+        private boolean isIdentifier(TerminalNode node) {
+            return (node.getSymbol().getType() == JavaLexer.IDENTIFIER);
+        }
+
+        private boolean isClassType(TerminalNode node) {
+            ParseTree parentCtx = node.getParent();
+            if (parentCtx instanceof JavaParser.ClassOrInterfaceTypeContext) {
+                return true;
+            }
+            return false;
         }
 
         private boolean isVariableUse(TerminalNode node) {
@@ -183,8 +209,19 @@ public class ExtractContexts {
                     terminal.scopeId == scopeId &&
                     (terminal.isVariableUse || terminal.isVariableDeclaration)) {
                     context.add(REFERENCE);
+                // Obfuscate all variable names if the obfuscate switch is set.
                 } else {
-                    context.add(terminal.text);
+                    if (OBFUSCATE && terminal.isVariableUse) {
+                        context.add(VARIABLE_USE);
+                    } else if (OBFUSCATE && terminal.isVariableDeclaration) {
+                        context.add(VARIABLE_DECLARATION);
+                    } else if (OBFUSCATE && terminal.isIdentifier) {
+                        context.add(IDENTIFIER);
+                    } else if (OBFUSCATE && terminal.isClassType) {
+                        context.add(CLASS_TYPE);
+                    } else {
+                        context.add(terminal.text);
+                    }
                 }
             }
             while (context.size() < this.contextSize * 2 + 1) {
@@ -224,10 +261,13 @@ public class ExtractContexts {
             int scopeId = this.scopeIdStack.peek();
             boolean isVariableDeclaration = isVariableDeclaration(node);
             boolean isVariableUse = isVariableUse(node);
+            boolean isIdentifier = isIdentifier(node);
+            boolean isClassType = isClassType(node);
 
             // Create a new record for this terminal
             Terminal terminal = new Terminal(
-                text, scopeId, isVariableDeclaration, isVariableUse);
+                text, scopeId, isVariableDeclaration, isVariableUse,
+                isIdentifier, isClassType);
 
             // Add to terminal to the fixed-length context buffer
             if (this.recentTerminals.size() >= this.contextSize) {
