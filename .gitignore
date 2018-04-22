@@ -1,3 +1,5 @@
 output.json
 errors.txt
 *.class
+data/
+.*.swp

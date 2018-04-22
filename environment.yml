@@ -1,0 +1,8 @@
+name: java_names
+dependencies:
+- python=3
+- pip
+- pip:
+  - numpy
+  - tensorflow-gpu
+  - keras
