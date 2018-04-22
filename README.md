@@ -54,6 +54,11 @@ in the console output.
 Want to extract longer contexts?  Edit the `.java`
 file---there's a variable for this.
 
+There is also a switch for obfuscating variables in the
+`.java` file called `OBFUSCATE`.  Set this to true or false
+based on whether you want the dataset to include variable
+names.
+
 ## Regenerating the Java parser and base tree listener
 
 If you want to change the Java grammar (`JavaParser.g4`,
