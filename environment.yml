@@ -6,3 +6,4 @@ dependencies:
   - numpy
   - tensorflow-gpu
   - keras
+  - h5py
