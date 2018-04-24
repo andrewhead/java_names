@@ -156,7 +156,7 @@ def get_config(mode):
         config['context_size'] = 5
         config['train_path'] = "data/processed/train_shuffled.json"
         config['validate_path'] = "data/processed/validate_shuffled.json"
-        config['test_path'] = "data/raw/test_output.json"
+        config['test_path'] = "data/processed/test_shuffled.json"
         config['max_encoder_seq_length'] = config['context_size'] * 2 + 1 + 2
         config['max_decoder_seq_length'] = 1 + 2  # one character + start + stop
 

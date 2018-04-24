@@ -115,16 +115,21 @@ for batch in test_data:
                     token = reverse_input_char_index.get(c)
                     if token in ["<<START>>", "<<END>>"]:
                         continue
-                    if ci == config['context_size'] + 1:
-                        tokens.append('...')
-                    else:
-                        tokens.append(token)
+                    tokens.append(token)
                 string = ' '.join(tokens)
                 if len(string) > 0 and not string.isspace():
                     strings.append(string)
         # input_seq = encoder_input_data[seq_index: seq_index + 1]
         decoded_sentence = decode_sequence(predict_inputs)
-        expected = reverse_target_char_index[np.argmax(batch[1][i][0])]
+
+        expected = ""
+        for k in range(4):
+            if np.sum(batch[1][i][k] > 0):
+                substr = reverse_target_char_index[np.argmax(batch[1][i][k])]
+                if k > 0:
+                    substr = substr[0].upper() + substr[1:]
+                expected += substr
+
         if (len(decoded_sentence) > 0):
             message = "Expected: " + expected + ", Predicted: " + decoded_sentence
         else:
