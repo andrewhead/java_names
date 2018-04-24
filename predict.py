@@ -11,7 +11,7 @@ from rnn import make_model, data_generator, get_config
 mode = 'subtoken'
 config = get_config(mode)
 model, encoder_inputs, encoder_state, decoder_lstm, decoder_inputs, decoder_dense = make_model(config)
-model.load_weights("models/" + mode + "_weights.hdf5")
+model.load_weights("models/" + mode + "_batch_weights.hdf5")
 
 
 # Next: inference mode (sampling).
@@ -59,7 +59,7 @@ def decode_sequence(input_sequences):
     # Sampling loop for a batch of sequences
     # (to simplify, here we assume a batch of size 1).
     stop_condition = False
-    decoded_sentence = ''
+    decoded = []
     while not stop_condition:
         output_tokens, h, c = decoder_model.predict(
             [target_seq] + states_value)
@@ -68,11 +68,13 @@ def decode_sequence(input_sequences):
         sampled_token_index = np.argmax(output_tokens[0, -1, :])
         sampled_char = reverse_target_char_index[sampled_token_index]
         score = output_tokens[0, -1, sampled_token_index]
+        print(sampled_char, score)
+        print(output_tokens[0, -1, config['output_vocabulary']['<<END>>']])
 
         # Exit condition: either hit max length
         # or find stop character.
-        if (sampled_char == '<<STOP>>' or
-            (len(decoded_sentence) >= max_decoder_seq_length - 2) or
+        if (sampled_char == '<<END>>' or
+            (len(decoded) >= max_decoder_seq_length - 2) or
             score < 0.2):
             stop_condition = True
         else:
@@ -85,9 +87,7 @@ def decode_sequence(input_sequences):
             if score < 0.2:
                 stop_condition = True
             else:
-                if len(decoded_sentence) > 0:
-                    sampled_char = sampled_char[0].upper() + sampled_char[1:]
-                decoded_sentence += sampled_char
+                decoded += [sampled_char]
 
         # Update the target sequence (of length 1).
         target_seq = np.zeros((1, 1, num_decoder_tokens))
@@ -96,11 +96,23 @@ def decode_sequence(input_sequences):
         # Update states
         states_value = [h, c]
 
-    return decoded_sentence
+    return decoded
 
 
-test_data = data_generator(config, 'test')
-for batch in test_data:
+def render_target(tokens):
+    target = ""
+    for token in tokens:
+        if len(target) > 0:
+            target += token[0].upper() + token[1:]
+        else:
+            target += token
+    return target
+
+
+test_data = data_generator(config, 'validate')
+
+for bi, batch in enumerate(test_data):
+
     for i in range(config['batch_size']):
         predict_inputs = []
         strings = []
@@ -120,18 +132,19 @@ for batch in test_data:
                 if len(string) > 0 and not string.isspace():
                     strings.append(string)
         # input_seq = encoder_input_data[seq_index: seq_index + 1]
-        decoded_sentence = decode_sequence(predict_inputs)
+        decoded = decode_sequence(predict_inputs)
+        decoded_word = render_target(decoded)
 
         expected = ""
-        for k in range(4):
+        for k in range(min(4, len(batch[1][i]))):
             if np.sum(batch[1][i][k] > 0):
                 substr = reverse_target_char_index[np.argmax(batch[1][i][k])]
                 if k > 0:
                     substr = substr[0].upper() + substr[1:]
                 expected += substr
 
-        if (len(decoded_sentence) > 0):
-            message = "Expected: " + expected + ", Predicted: " + decoded_sentence
+        if (len(decoded_word) > 0):
+            message = "Expected: " + expected + ", Predicted: " + decoded_word
         else:
             message = "Expected: " + expected + ", NO GUESS."
         print()

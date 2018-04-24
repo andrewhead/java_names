@@ -2,9 +2,10 @@
 from __future__ import print_function
 import json
 import math
+import sys
 
 import numpy as np
-from keras.callbacks import ModelCheckpoint, TensorBoard, LambdaCallback
+from keras.callbacks import ModelCheckpoint, TensorBoard, LambdaCallback, Callback
 from keras.models import Model
 from keras.layers import Input, LSTM, Dense, Average
 
@@ -97,6 +98,7 @@ def data_generator(config, type_):
                     decoder_input[index_in_batch][i][word_index] = 1.
                     if i > 0:
                         decoder_target[index_in_batch][i - 1][word_index] = 1.
+                decoder_target[index_in_batch][i][output_vocabulary["<<END>>"]] = 1.
 
             elif mode == "subtoken":
 
@@ -118,12 +120,13 @@ def data_generator(config, type_):
 
                 decoder_input[index_in_batch][0][output_vocabulary["<<START>>"]] = 1.
                 for i, word in enumerate(data['variableName'], start=1):
-                    if i >= max_decoder_seq_length:
+                    if i >= max_decoder_seq_length - 1:
                         break
                     word_index = output_vocabulary.get(word, output_vocabulary["<<UNK>>"])
                     decoder_input[index_in_batch][i][word_index] = 1.
                     if i > 0:
                         decoder_target[index_in_batch][i - 1][word_index] = 1.
+                decoder_target[index_in_batch][i][output_vocabulary["<<END>>"]] = 1.
 
             if index_in_batch == batch_size - 1:
                 yield (all_inputs, decoder_target)
@@ -232,12 +235,29 @@ def make_model(config):
     return model, encoder_inputs_all, [h_state, c_state], decoder_lstm, decoder_inputs, decoder_dense
 
 
+# Based on code example from https://stackoverflow.com/questions/43794995/python
+class Checkpointer(Callback):
+
+    def __init__(self, model, path, N):
+        self.model = model
+        self.N = N
+        self.batch = 0
+        self.path = path
+
+    def on_batch_end(self, batch, logs={}):
+        if self.batch > 0 and self.batch % self.N == 0:
+            self.model.save_weights(self.path)
+        self.batch += 1
+
+
 if __name__ == "__main__":
 
-    mode = "token"
+    mode = sys.argv[1]
+    print(mode)
     config = get_config(mode)
     model, _, _, _, _, _ = make_model(config)
-    checkpointer = ModelCheckpoint(
+    batch_checkpointer = Checkpointer(model, "models/" + mode + "_batch_weights.hdf5", 500)
+    epoch_checkpointer = ModelCheckpoint(
         filepath="models/" + mode + "_weights.hdf5",
         verbose=1,
         save_best_only=True)
@@ -250,7 +270,7 @@ if __name__ == "__main__":
         verbose=1,
         validation_data=data_generator(config, 'validate'),
         validation_steps=config['validate_batches'],
-        callbacks=[checkpointer],
+        callbacks=[batch_checkpointer, epoch_checkpointer],
         epochs=config['epochs'])
 
     # Save model
