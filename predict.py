@@ -1,17 +1,14 @@
 '''Sequence to sequence example in Keras (character-level).'''
 from __future__ import print_function
-import json
-import math
 
 import numpy as np
-from keras.callbacks import ModelCheckpoint, TensorBoard, LambdaCallback
 from keras.models import Model
 from keras.layers import Input, LSTM, Dense, Average
 
 from rnn import make_model, data_generator, get_config
 
 
-mode = 'token'
+mode = 'subtoken'
 config = get_config(mode)
 model, encoder_inputs, encoder_state, decoder_lstm, decoder_inputs, decoder_dense = make_model(config)
 model.load_weights("models/" + mode + "_weights.hdf5")
@@ -70,13 +67,27 @@ def decode_sequence(input_sequences):
         # Sample a token
         sampled_token_index = np.argmax(output_tokens[0, -1, :])
         sampled_char = reverse_target_char_index[sampled_token_index]
-        decoded_sentence += sampled_char
+        score = output_tokens[0, -1, sampled_token_index]
 
         # Exit condition: either hit max length
         # or find stop character.
         if (sampled_char == '<<STOP>>' or
-           len(decoded_sentence) > max_decoder_seq_length):
+            (len(decoded_sentence) >= max_decoder_seq_length - 2) or
+            score < 0.2):
             stop_condition = True
+        else:
+            # No unknowns allowed---always predict something
+            if sampled_char == "<<UNK>>":
+                output_tokens[0, -1, sampled_token_index] = 0
+                sampled_token_index = np.argmax(output_tokens[0, -1, :])
+                sampled_char = reverse_target_char_index[sampled_token_index]
+                score = output_tokens[0, -1, sampled_token_index]
+            if score < 0.2:
+                stop_condition = True
+            else:
+                if len(decoded_sentence) > 0:
+                    sampled_char = sampled_char[0].upper() + sampled_char[1:]
+                decoded_sentence += sampled_char
 
         # Update the target sequence (of length 1).
         target_seq = np.zeros((1, 1, num_decoder_tokens))
@@ -92,13 +103,34 @@ test_data = data_generator(config, 'test')
 for batch in test_data:
     for i in range(config['batch_size']):
         predict_inputs = []
+        strings = []
         for j in range(config['num_contexts']):
             shape = batch[0][j][i].shape
             predict_inputs.append(batch[0][j][i].reshape((1, shape[0], shape[1])))
+            input_sequence = np.argmax(batch[0][j][i], axis=1)
+            isnt_padding = np.sum(batch[0][j][i]) > 0
+            if isnt_padding:
+                tokens = []
+                for ci, c in enumerate(input_sequence):
+                    token = reverse_input_char_index.get(c)
+                    if token in ["<<START>>", "<<END>>"]:
+                        continue
+                    if ci == config['context_size'] + 1:
+                        tokens.append('...')
+                    else:
+                        tokens.append(token)
+                string = ' '.join(tokens)
+                if len(string) > 0 and not string.isspace():
+                    strings.append(string)
         # input_seq = encoder_input_data[seq_index: seq_index + 1]
         decoded_sentence = decode_sequence(predict_inputs)
-        print(
-            '- Expected:',
-            reverse_target_char_index[np.argmax(batch[1][i][0])],
-            ", Decoded",
-            decoded_sentence)
+        expected = reverse_target_char_index[np.argmax(batch[1][i][0])]
+        if (len(decoded_sentence) > 0):
+            message = "Expected: " + expected + ", Predicted: " + decoded_sentence
+        else:
+            message = "Expected: " + expected + ", NO GUESS."
+        print()
+        print(message)
+        print("Contexts:")
+        for s in strings:
+            print("* " + s)

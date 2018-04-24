@@ -111,7 +111,7 @@ def data_generator(config, type_):
                         word_index = input_vocabulary.get(word, input_vocabulary["<<UNK>>"])
                         encoder_inputs[ci][index_in_batch][wi][word_index] = 1.
                     encoder_inputs[ci][index_in_batch][wi + 1][input_vocabulary["<<REF>>"]] = 1.
-                    for wi, word in enumerate(before, start=(wi + 2)):
+                    for wi, word in enumerate(after, start=(wi + 2)):
                         word_index = input_vocabulary.get(word, input_vocabulary["<<UNK>>"])
                         encoder_inputs[ci][index_in_batch][wi][word_index] = 1.
                     encoder_inputs[ci][index_in_batch][wi + 1][input_vocabulary["<<END>>"]] = 1.
@@ -131,7 +131,7 @@ def data_generator(config, type_):
             lines_read += 1
     
         # This will flush the last partial batch
-        yield ([encoder_input, decoder_input], decoder_target)
+        yield (all_inputs, decoder_target)
         yield StopIteration
 
 
@@ -139,7 +139,6 @@ def get_config(mode):
 
     config = { 'mode': mode }
     config['num_contexts'] = 5
-    config['context_size'] = 5
     config['batch_size'] = 32
     config['epochs'] = 10
     config['latent_dim'] = 256
@@ -154,6 +153,7 @@ def get_config(mode):
     config['num_decoder_tokens'] = len(config['output_vocabulary'])
 
     if mode == "token":
+        config['context_size'] = 5
         config['train_path'] = "data/processed/train_shuffled.json"
         config['validate_path'] = "data/processed/validate_shuffled.json"
         config['test_path'] = "data/raw/test_output.json"
@@ -161,10 +161,11 @@ def get_config(mode):
         config['max_decoder_seq_length'] = 1 + 2  # one character + start + stop
 
     elif mode == "subtoken":
+        config['context_size'] = 8
         config['train_path'] = "data/processed/train_subtokens_shuffled.json"
         config['validate_path'] = "data/processed/validate_subtokens_shuffled.json"
-        config['test_path'] = "data/raw/test_subtokens.json"
-        config['max_encoder_seq_length'] = config['context_size'] * 2 + 4 + 2
+        config['test_path'] = "data/processed/test_subtokens_shuffled.json"
+        config['max_encoder_seq_length'] = config['context_size'] * 2 + 1 + 2
         config['max_decoder_seq_length'] = 4 + 2  # four subtokens + start + stop
 
     return config
@@ -233,7 +234,7 @@ def make_model(config):
 
 if __name__ == "__main__":
 
-    mode = "subtoken"
+    mode = "token"
     config = get_config(mode)
     model, _, _, _, _, _ = make_model(config)
     checkpointer = ModelCheckpoint(
