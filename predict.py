@@ -63,6 +63,86 @@ def get_next(config, decoder, start_state, sequence, top):
     return predictions
 
 
+def score_sequence(sequence):
+    """
+    Compute a score for a predicted sequence.  Each element in the sequence
+    is a tuple, including a token ID and a score.
+    """
+    # Sum up the log scores of each of the components
+    score_log_sum = 0
+    for (_, score) in sequence:
+        # To avoid overflow, if the score is 0, set it to a very small value.
+        if score == 0:
+            score = 1e-10
+        score_log_sum += np.log(score)
+
+    # Use the heuristic normalization described in Neubig's 2017 tutorial.
+    length = len(sequence)
+    score_normalized = score_log_sum / length
+    return score_normalized
+
+
+def beam_search(config, decoder, start_state, beam_size):
+    """
+    Do a beam search for promising expansions of the variable name.
+    Args:
+    * config     : configuration settings
+    * decoder    : RNN decoder
+    * start_state: output of encoder on some contexts
+    * beam_size  : the number of options to keep
+    Returns: List of tuples.  In each tuple is a sequence of scored token
+    and a score for the whole sequence.
+    """
+    output_vocabulary = config['output_vocabulary']
+    max_decoder_seq_length = config['max_decoder_seq_length']
+
+    # The first sequence is just the start token.
+    best_sequences = [[(output_vocabulary["<<START>>"], 1)]]
+
+    # Redo the search to a new level of depth with the best sequences
+    # seen so far, expanding them.
+    sequence_length = 1
+    while sequence_length < max_decoder_seq_length:
+
+        # Add new candidate sequences by expanding the current sequences
+        candidate_sequences = list(best_sequences)
+        for sequence in best_sequences:
+
+            # Expand sequences at the frontier of the search.
+            if len(sequence) == sequence_length:
+
+                # Predict the next most likely tokens for this sequence
+                token_ids = [int(s[1]) for s in sequence]
+                next_tokens = get_next(
+                    config, decoder, start_state, token_ids, beam_size)
+
+                # Create new sequences for the expected tokens.
+                # Ignore all "END" tokens, because this will often duplicate
+                # sequences (one version with END, one version without).
+                for next_token in next_tokens:
+                    next_token_id = next_token[0]
+                    if next_token_id != output_vocabulary["<<END>>"]:
+                        candidate_sequence = sequence + [next_token]
+                        candidate_sequences.append(candidate_sequence)
+
+            # Remove all length-1 sequences from the beam, as they will
+            # only contain a start sequence.
+            if len(sequence) == 1:
+                del(candidate_sequences[0])
+
+        # Prune back to the top N best sequences
+        sorted_sequences = sorted(
+            candidate_sequences,
+            key=lambda s: score_sequence(s),
+            reverse=True)
+        best_sequences = sorted_sequences[:beam_size]
+
+        sequence_length += 1
+
+    result = [(seq, score_sequence(seq)) for seq in best_sequences]
+    return result
+
+
 def get_state(encoder, input_sequences):
     """
     Get the start state for a decoder.
@@ -73,66 +153,6 @@ def get_state(encoder, input_sequences):
     """
     # Encode the input as state vectors.
     return encoder_model.predict(input_sequences)
-
-
-def decode_sequence(input_sequences):
-
-    # Encode the input as state vectors.
-    states_value = encoder_model.predict(input_sequences)
-
-    # Generate empty target sequence of length 1.
-    target_seq = np.zeros((1, 1, num_decoder_tokens))
-    # Populate the first character of target sequence with the start character.
-    target_seq[0, 0, output_vocabulary['<<START>>']] = 1.
-
-    # Sampling loop for a batch of sequences
-    # (to simplify, here we assume a batch of size 1).
-    stop_condition = False
-    decoded = []
-    while not stop_condition:
-        output_tokens, h, c = decoder_model.predict(
-            [target_seq] + states_value)
-
-        # Sample a token
-        sampled_token_index = np.argmax(output_tokens[0, -1, :])
-        sampled_char = reverse_target_char_index[sampled_token_index]
-        score = output_tokens[0, -1, sampled_token_index]
-
-        # Exit condition: either hit max length or find stop character.
-        if (sampled_char == '<<END>>' or
-            (len(decoded) >= max_decoder_seq_length - 2) or
-            score < 0.2):
-            stop_condition = True
-        else:
-            # No unknowns allowed---always predict something
-            if sampled_char == "<<UNK>>":
-                output_tokens[0, -1, sampled_token_index] = 0
-                sampled_token_index = np.argmax(output_tokens[0, -1, :])
-                sampled_char = reverse_target_char_index[sampled_token_index]
-                score = output_tokens[0, -1, sampled_token_index]
-            if score < 0.2:
-                stop_condition = True
-            else:
-                decoded += [sampled_char]
-
-        # Update the target sequence (of length 1).
-        target_seq = np.zeros((1, 1, num_decoder_tokens))
-        target_seq[0, 0, sampled_token_index] = 1.
-
-        # Update states
-        states_value = [h, c]
-
-    return decoded
-
-
-def render_target(tokens):
-    target = ""
-    for token in tokens:
-        if len(target) > 0:
-            target += token[0].upper() + token[1:]
-        else:
-            target += token
-    return target
 
 
 def load_weights(model, unit, weights_type):
@@ -204,6 +224,22 @@ def get_contexts(config, batch):
     return contexts
 
 
+def render_output(config, token_ids):
+
+    output_id_2_word = config['output_id_2_word']
+
+    target = ""
+    for tok_id in token_ids:
+        word = output_id_2_word[tok_id]
+        if word in ["<<START>>", "<<END>>"]:
+            continue
+        if len(target) > 0:
+            target += word[0].upper() + word[1:]
+        else:
+            target += word
+    return target
+
+
 if __name__ == '__main__':
 
     # Parse arguments
@@ -218,12 +254,24 @@ if __name__ == '__main__':
         help="type of checkpoint",
         choices=["epoch", "batch"],
         required=True)
+    parser.add_argument(
+        "-b",
+        help="number of batches to compute results for",
+        type=int,
+        default=10)
+    parser.add_argument(
+        "--beam-size",
+        help="size of beam when predicting results",
+        type=int,
+        default=10)
     args = parser.parse_args()
     unit = args.u
     weights_type = args.c
+    batches = args.b
+    beam_size = args.beam_size
 
     # Prepare configurable settings
-    config = get_config(mode)
+    config = get_config(unit)
     input_vocabulary = config['input_vocabulary']
     output_vocabulary = config['output_vocabulary']
     num_decoder_tokens = config['num_decoder_tokens']
@@ -247,12 +295,8 @@ if __name__ == '__main__':
     for bi, batch in enumerate(test_data):
 
         # Enable the following to just print out a few lines of data
-        if bi > 10:
+        if bi >= batches:
             break
-
-        # Enable for computing accuracy
-        # if bi >= 1563:
-        #     break
 
         # Iterate over each test point separately
         for i in range(config['batch_size']):
@@ -281,11 +325,6 @@ if __name__ == '__main__':
                     if len(string) > 0 and not string.isspace():
                         strings.append(string)
 
-            # Predict the output sequence.
-            # This is the part where we should do a beam search.
-            decoded = decode_sequence(predict_inputs)
-            decoded_word = render_target(decoded)
-
             # Convert the expected string to a camel-case variable.
             # TODO(andrewhead): merge with `render_target`?
             expected = ""
@@ -297,23 +336,22 @@ if __name__ == '__main__':
                     if k > 0:
                         substr = substr[0].upper() + substr[1:]
                     expected += substr
+            print("Expected", expected)
 
-            # If a non-unknown token is predicted, then print.
-            if len(decoded_word) > 0:
-                print("\t".join([
-                    decoded_word,
-                    expected,
-                    "",
-                    "",
-                    "",
-                    ] + strings
-                ))
+            # Predict the output sequence with beam search.
+            state = encoder_model.predict(predict_inputs)
+            candidates = beam_search(config, decoder_model, state, beam_size)
+            decoded_candidates = []
+            for candidate in candidates:
+                decoded_word = render_output(config, [t[0] for t in candidate[0]])
+                decoded_candidates.append(decoded_word)
+                print("Predicted", decoded_word, candidate[1])
 
             # Update counts for summary statistics
             total_num += 1
             if len(decoded_word) == 0:
                 num_uncertain += 1
-            if len(decoded_word) > 0 and decoded_word == expected:
+            if len(decoded_word) > 0 and expected in decoded_candidates:
                 num_correct += 1
 
     # print("Total:", total_num)
