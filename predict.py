@@ -285,10 +285,10 @@ if __name__ == '__main__':
     model, encoder_model, decoder_model = prepare_models(config, unit, weights_type)
 
     # Set up the data generator
-    test_data = data_generator(config, 'validate')
+    test_data = data_generator(config, 'test')
 
     # Counters for summary statistics of accuracy
-    num_uncertain = 0
+    num_unk = 0
     total_num = 0
     num_correct = 0
 
@@ -351,7 +351,9 @@ if __name__ == '__main__':
             total_num += 1
             if len(decoded_word) > 0 and expected in decoded_candidates:
                 num_correct += 1
+            if "<<UNK>>" in expected:
+                num_unk += 1
 
-    print("Total:", total_num)
-    print("Predicted:", total_num - num_uncertain)
-    print("Correct of predicted:", num_correct)
+        print("Total:", total_num)
+        print("Total non-UNK:", total_num - num_unk)
+        print("Correct of predicted:", num_correct)
