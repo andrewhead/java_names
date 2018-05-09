@@ -47,95 +47,97 @@ def data_generator(config, type_):
 
     lines_read = 0
 
-    with open(filename, 'r', encoding='utf-8') as file_:
+    while True:
 
-        for line in file_:
+        # Reopen the file and re-read it in a loop.
+        with open(filename, 'r', encoding='utf-8') as file_:
 
-            index_in_batch = lines_read % batch_size
+            for line in file_:
 
-            # Set up new one-hot training set whenever we start a new batch
-            # Do we need to add in the pad token?  Or is it just assumed that straight zeros
-            # means that this is a padding token?
-            if index_in_batch == 0:
-                all_inputs = []
-                encoder_inputs = []
-                for _ in range(num_contexts):
-                    encoder_input = np.zeros(
-                        (batch_size, max_encoder_seq_length, num_encoder_tokens),
+                index_in_batch = lines_read % batch_size
+
+                # Set up new one-hot training set whenever we start a new batch
+                # Do we need to add in the pad token?  Or is it just assumed that straight zeros
+                # means that this is a padding token?
+                if index_in_batch == 0:
+                    all_inputs = []
+                    encoder_inputs = []
+                    for _ in range(num_contexts):
+                        encoder_input = np.zeros(
+                            (batch_size, max_encoder_seq_length, num_encoder_tokens),
+                            dtype='float32')
+                        encoder_inputs.append(encoder_input)
+                        all_inputs.append(encoder_input)
+                    decoder_input = np.zeros(
+                        (batch_size, max_decoder_seq_length, num_decoder_tokens),
                         dtype='float32')
-                    encoder_inputs.append(encoder_input)
-                    all_inputs.append(encoder_input)
-                decoder_input = np.zeros(
-                    (batch_size, max_decoder_seq_length, num_decoder_tokens),
-                    dtype='float32')
-                all_inputs.append(decoder_input)
-                decoder_target = np.zeros(
-                    (batch_size, max_decoder_seq_length, num_decoder_tokens),
-                    dtype='float32')
+                    all_inputs.append(decoder_input)
+                    decoder_target = np.zeros(
+                        (batch_size, max_decoder_seq_length, num_decoder_tokens),
+                        dtype='float32')
 
-            # Load in the data for this line
-            data = json.loads(line)
+                # Load in the data for this line
+                data = json.loads(line)
 
-            if mode == "token":
+                if mode == "token":
 
-                # Save one-hot values for encoder input
-                usage = data['usage']
-                for ci, context in enumerate(usage):
-                    if ci >= num_contexts:
-                        break
-                    encoder_inputs[ci][index_in_batch][0][input_vocabulary["<<START>>"]] = 1.
-                    word_middle = math.ceil(len(context) / 2)
-                    for wi, word in enumerate(
-                        context[word_middle - context_size:word_middle + context_size],
-                        start=1):
-                        word_index = input_vocabulary.get(word, input_vocabulary["<<UNK>>"])
-                        encoder_inputs[ci][index_in_batch][wi][word_index] = 1.
-                    encoder_inputs[ci][index_in_batch][wi + 1][input_vocabulary["<<END>>"]] = 1.
+                    # Save one-hot values for encoder input
+                    usage = data['usage']
+                    for ci, context in enumerate(usage):
+                        if ci >= num_contexts:
+                            break
+                        encoder_inputs[ci][index_in_batch][0][input_vocabulary["<<START>>"]] = 1.
+                        word_middle = math.ceil(len(context) / 2)
+                        for wi, word in enumerate(
+                            context[word_middle - context_size:word_middle + context_size],
+                            start=1):
+                            word_index = input_vocabulary.get(word, input_vocabulary["<<UNK>>"])
+                            encoder_inputs[ci][index_in_batch][wi][word_index] = 1.
+                        encoder_inputs[ci][index_in_batch][wi + 1][input_vocabulary["<<END>>"]] = 1.
 
-                decoder_input[index_in_batch][0][output_vocabulary["<<START>>"]] = 1.
-                for i, word in enumerate([data['variableName']], start=1):
-                    word_index = output_vocabulary.get(word, output_vocabulary["<<UNK>>"])
-                    decoder_input[index_in_batch][i][word_index] = 1.
-                    if i > 0:
-                        decoder_target[index_in_batch][i - 1][word_index] = 1.
-                decoder_target[index_in_batch][i][output_vocabulary["<<END>>"]] = 1.
+                    decoder_input[index_in_batch][0][output_vocabulary["<<START>>"]] = 1.
+                    for i, word in enumerate([data['variableName']], start=1):
+                        word_index = output_vocabulary.get(word, output_vocabulary["<<UNK>>"])
+                        decoder_input[index_in_batch][i][word_index] = 1.
+                        if i > 0:
+                            decoder_target[index_in_batch][i - 1][word_index] = 1.
+                    decoder_target[index_in_batch][i][output_vocabulary["<<END>>"]] = 1.
 
-            elif mode == "subtoken":
+                elif mode == "subtoken":
 
-                usage = data['usage']
-                for ci, context in enumerate(usage):
-                    if ci >= num_contexts:
-                        break
-                    encoder_inputs[ci][index_in_batch][0][input_vocabulary["<<START>>"]] = 1.
-                    before = context['before'][-context_size:]
-                    after = context['after'][:context_size]
-                    for wi, word in enumerate(before, start=1):
-                        word_index = input_vocabulary.get(word, input_vocabulary["<<UNK>>"])
-                        encoder_inputs[ci][index_in_batch][wi][word_index] = 1.
-                    encoder_inputs[ci][index_in_batch][wi + 1][input_vocabulary["<<REF>>"]] = 1.
-                    for wi, word in enumerate(after, start=(wi + 2)):
-                        word_index = input_vocabulary.get(word, input_vocabulary["<<UNK>>"])
-                        encoder_inputs[ci][index_in_batch][wi][word_index] = 1.
-                    encoder_inputs[ci][index_in_batch][wi + 1][input_vocabulary["<<END>>"]] = 1.
+                    usage = data['usage']
+                    for ci, context in enumerate(usage):
+                        if ci >= num_contexts:
+                            break
+                        encoder_inputs[ci][index_in_batch][0][input_vocabulary["<<START>>"]] = 1.
+                        before = context['before'][-context_size:]
+                        after = context['after'][:context_size]
+                        for wi, word in enumerate(before, start=1):
+                            word_index = input_vocabulary.get(word, input_vocabulary["<<UNK>>"])
+                            encoder_inputs[ci][index_in_batch][wi][word_index] = 1.
+                        encoder_inputs[ci][index_in_batch][wi + 1][input_vocabulary["<<REF>>"]] = 1.
+                        for wi, word in enumerate(after, start=(wi + 2)):
+                            word_index = input_vocabulary.get(word, input_vocabulary["<<UNK>>"])
+                            encoder_inputs[ci][index_in_batch][wi][word_index] = 1.
+                        encoder_inputs[ci][index_in_batch][wi + 1][input_vocabulary["<<END>>"]] = 1.
 
-                decoder_input[index_in_batch][0][output_vocabulary["<<START>>"]] = 1.
-                for i, word in enumerate(data['variableName'], start=1):
-                    if i >= max_decoder_seq_length - 1:
-                        break
-                    word_index = output_vocabulary.get(word, output_vocabulary["<<UNK>>"])
-                    decoder_input[index_in_batch][i][word_index] = 1.
-                    if i > 0:
-                        decoder_target[index_in_batch][i - 1][word_index] = 1.
-                decoder_target[index_in_batch][i][output_vocabulary["<<END>>"]] = 1.
+                    decoder_input[index_in_batch][0][output_vocabulary["<<START>>"]] = 1.
+                    for i, word in enumerate(data['variableName'], start=1):
+                        if i >= max_decoder_seq_length - 1:
+                            break
+                        word_index = output_vocabulary.get(word, output_vocabulary["<<UNK>>"])
+                        decoder_input[index_in_batch][i][word_index] = 1.
+                        if i > 0:
+                            decoder_target[index_in_batch][i - 1][word_index] = 1.
+                    decoder_target[index_in_batch][i][output_vocabulary["<<END>>"]] = 1.
 
-            if index_in_batch == batch_size - 1:
-                yield (all_inputs, decoder_target)
+                if index_in_batch == batch_size - 1:
+                    yield (all_inputs, decoder_target)
 
-            lines_read += 1
-    
-        # This will flush the last partial batch
-        yield (all_inputs, decoder_target)
-        yield StopIteration
+                lines_read += 1
+        
+            # This will flush the last partial batch
+            yield (all_inputs, decoder_target)
 
 
 def get_config(mode):
@@ -143,15 +145,17 @@ def get_config(mode):
     config = { 'mode': mode }
     config['num_contexts'] = 5
     config['batch_size'] = 32
-    config['epochs'] = 10
+    config['epochs'] = 30
     config['latent_dim'] = 256
-    config['train_size'] = 3000000  # 17497673
-    config['validate_size'] = 50000  # 2495770
+    config['train_size'] = 17497673
+    config['validate_size'] = 200000  # 2495770
     config['test_size'] = 2164443
     config['train_batches'] = math.ceil(config['train_size'] / config['batch_size'])
     config['validate_batches'] = math.ceil(config['validate_size'] / config['batch_size'])
     config['test_batches'] = math.ceil(config['test_size'] / config['batch_size'])
     config['input_vocabulary'], config['output_vocabulary'] = load_vocabularies(mode)
+    config['input_id_2_word'] = { v: k for k, v in config['input_vocabulary'].items() } 
+    config['output_id_2_word'] = { v: k for k, v in config['output_vocabulary'].items() } 
     config['num_encoder_tokens'] = len(config['input_vocabulary'])
     config['num_decoder_tokens'] = len(config['output_vocabulary'])
 
@@ -189,10 +193,10 @@ def make_model(config):
 
     encoder_inputs_all = []
 
-    print('Number of unique input tokens:', num_encoder_tokens)
-    print('Number of unique output tokens:', num_decoder_tokens)
-    print('Max sequence length for inputs:', max_encoder_seq_length)
-    print('Max sequence length for outputs:', max_decoder_seq_length)
+    # print('Number of unique input tokens:', num_encoder_tokens)
+    # print('Number of unique output tokens:', num_decoder_tokens)
+    # print('Max sequence length for inputs:', max_encoder_seq_length)
+    # print('Max sequence length for outputs:', max_decoder_seq_length)
 
     h_states = []
     c_states = []
