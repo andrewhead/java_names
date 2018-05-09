@@ -112,7 +112,7 @@ def beam_search(config, decoder, start_state, beam_size):
             if len(sequence) == sequence_length:
 
                 # Predict the next most likely tokens for this sequence
-                token_ids = [int(s[1]) for s in sequence]
+                token_ids = [int(s[0]) for s in sequence]
                 next_tokens = get_next(
                     config, decoder, start_state, token_ids, beam_size)
 
@@ -349,11 +349,9 @@ if __name__ == '__main__':
 
             # Update counts for summary statistics
             total_num += 1
-            if len(decoded_word) == 0:
-                num_uncertain += 1
             if len(decoded_word) > 0 and expected in decoded_candidates:
                 num_correct += 1
 
-    # print("Total:", total_num)
-    # print("Predicted:", total_num - num_uncertain)
-    # print("Correct of predicted:", num_correct)
+    print("Total:", total_num)
+    print("Predicted:", total_num - num_uncertain)
+    print("Correct of predicted:", num_correct)
