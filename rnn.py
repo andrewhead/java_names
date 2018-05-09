@@ -166,6 +166,7 @@ def get_config(mode):
         config['test_path'] = "data/processed/test_shuffled.json"
         config['max_encoder_seq_length'] = config['context_size'] * 2 + 1 + 2
         config['max_decoder_seq_length'] = 1 + 2  # one character + start + stop
+        config['max_prediction_tokens'] = 2  # stop after the first char after start
 
     elif mode == "subtoken":
         config['context_size'] = 8
@@ -174,6 +175,7 @@ def get_config(mode):
         config['test_path'] = "data/processed/test_subtokens_shuffled.json"
         config['max_encoder_seq_length'] = config['context_size'] * 2 + 1 + 2
         config['max_decoder_seq_length'] = 4 + 2  # four subtokens + start + stop
+        config['max_prediction_tokens'] = config['max_decoder_seq_length']
 
     return config
 

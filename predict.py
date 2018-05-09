@@ -94,7 +94,7 @@ def beam_search(config, decoder, start_state, beam_size):
     and a score for the whole sequence.
     """
     output_vocabulary = config['output_vocabulary']
-    max_decoder_seq_length = config['max_decoder_seq_length']
+    max_prediction_tokens = config['max_prediction_tokens']
 
     # The first sequence is just the start token.
     best_sequences = [[(output_vocabulary["<<START>>"], 1)]]
@@ -102,7 +102,7 @@ def beam_search(config, decoder, start_state, beam_size):
     # Redo the search to a new level of depth with the best sequences
     # seen so far, expanding them.
     sequence_length = 1
-    while sequence_length < max_decoder_seq_length:
+    while sequence_length < max_prediction_tokens:
 
         # Add new candidate sequences by expanding the current sequences
         candidate_sequences = list(best_sequences)
@@ -264,11 +264,24 @@ if __name__ == '__main__':
         help="size of beam when predicting results",
         type=int,
         default=10)
+    parser.add_argument(
+        "--print-context",
+        action="store_true",
+        help="whether to print variable context with each prediction")
+    parser.add_argument(
+        "--output-file",
+        type=str,
+        help="path to a file to save results in TSV format")
     args = parser.parse_args()
     unit = args.u
     weights_type = args.c
     batches = args.b
     beam_size = args.beam_size
+    print_context = args.print_context
+    output_filename = args.output_file
+
+    if output_filename:
+        output_file = open(output_filename, "w", encoding="utf-8")
 
     # Prepare configurable settings
     config = get_config(unit)
@@ -336,16 +349,19 @@ if __name__ == '__main__':
                     if k > 0:
                         substr = substr[0].upper() + substr[1:]
                     expected += substr
-            print("Expected", expected)
 
             # Predict the output sequence with beam search.
             state = encoder_model.predict(predict_inputs)
             candidates = beam_search(config, decoder_model, state, beam_size)
             decoded_candidates = []
-            for candidate in candidates:
+            for rank, candidate in enumerate(candidates, start=1):
                 decoded_word = render_output(config, [t[0] for t in candidate[0]])
                 decoded_candidates.append(decoded_word)
-                print("Predicted", decoded_word, candidate[1])
+                if output_filename:
+                    output = [expected, decoded_word, rank, candidate[1]]
+                    if print_context:
+                        output.extend(strings)
+                    output_file.write('\t'.join([str(_) for _ in output]) + "\n")
 
             # Update counts for summary statistics
             total_num += 1
@@ -354,6 +370,6 @@ if __name__ == '__main__':
             if "<<UNK>>" in expected:
                 num_unk += 1
 
-        print("Total:", total_num)
-        print("Total non-UNK:", total_num - num_unk)
-        print("Correct of predicted:", num_correct)
+        print(
+            "Correctly predicted", num_correct, "/", total_num - num_unk,
+            "known tokens (", total_num, "total )")
